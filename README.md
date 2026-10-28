@@ -24,7 +24,7 @@
 
 # 
 
-# Data formats, API shapes and rules are in CONTRACT.md. Read it before coding.
+# Data formats, API shapes and rules are in  API_CONTRACT.md. Read it before coding.
 
 # 
 
