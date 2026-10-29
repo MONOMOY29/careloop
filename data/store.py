@@ -101,3 +101,138 @@ def add_event(patient_id, type, title, start_time, end_time,
         return _event_to_dict(row)
     finally:
         conn.close()
+
+from datetime import datetime, timezone
+
+
+def _now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def get_event(event_id):
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM events WHERE event_id = ?", (event_id,)
+        ).fetchone()
+        return _event_to_dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def reschedule_event(event_id, new_start, new_end):
+    """Used by POST /alerts/{id}/accept for conflicts. Returns updated event or None."""
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "UPDATE events SET start_time = ?, end_time = ? WHERE event_id = ?",
+            (new_start, new_end, event_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            return None
+    finally:
+        conn.close()
+    return get_event(event_id)
+
+
+def cancel_event(event_id):
+    """Used by POST /alerts/{id}/accept for duplicates. Returns updated event or None."""
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "UPDATE events SET status = 'cancelled' WHERE event_id = ?",
+            (event_id,),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            return None
+    finally:
+        conn.close()
+    return get_event(event_id)
+
+def add_alert(patient_id, type, confidence, severity, reason,
+              detected_at=None, status="pending"):
+    """Insert one alert (ids from alt-881) and return it in contract format."""
+    conn = get_connection()
+    try:
+        alert_id = next_id(conn, "alerts", "id", "alt")
+        conn.execute(
+            "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (alert_id, patient_id, type, confidence, severity, reason,
+             status, detected_at or _now()),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM alerts WHERE id = ?", (alert_id,)
+        ).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def get_alerts(patient_id=None, status=None):
+    """Contract GET /alerts with optional filters."""
+    sql, args = "SELECT * FROM alerts WHERE 1=1", []
+    if patient_id:
+        sql += " AND patient_id = ?"
+        args.append(patient_id)
+    if status:
+        sql += " AND status = ?"
+        args.append(status)
+    sql += " ORDER BY detected_at, id"
+    conn = get_connection()
+    try:
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+    finally:
+        conn.close()
+
+
+def set_alert_status(alert_id, status):
+    """status is 'pending' or 'resolved'. Returns updated alert or None."""
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "UPDATE alerts SET status = ? WHERE id = ?", (status, alert_id)
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            return None
+        return dict(conn.execute(
+            "SELECT * FROM alerts WHERE id = ?", (alert_id,)
+        ).fetchone())
+    finally:
+        conn.close()
+
+
+def add_audit(alert_id, patient_id, action, performed_by, details,
+              prior_state, new_state, timestamp=None):
+    """Append one audit entry (ids from aud-1042) and return it."""
+    conn = get_connection()
+    try:
+        audit_id = next_id(conn, "audit", "id", "aud")
+        conn.execute(
+            "INSERT INTO audit VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (audit_id, alert_id, patient_id, action, performed_by,
+             timestamp or _now(), details, prior_state, new_state),
+        )
+        conn.commit()
+        return dict(conn.execute(
+            "SELECT * FROM audit WHERE id = ?", (audit_id,)
+        ).fetchone())
+    finally:
+        conn.close()
+
+
+def get_audit(patient_id=None):
+    """Contract GET /audit: newest first, optional patient filter."""
+    sql, args = "SELECT * FROM audit", []
+    if patient_id:
+        sql += " WHERE patient_id = ?"
+        args.append(patient_id)
+    sql += " ORDER BY timestamp DESC, id DESC"
+    conn = get_connection()
+    try:
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+    finally:
+        conn.close()
