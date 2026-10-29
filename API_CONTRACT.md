@@ -20,7 +20,7 @@ This is the **only** contract. It is Member 3's v1.2 plus five team amendments, 
 | `confidence` | string | `"Definite"`, `"Possible"` |
 | `severity` | string | `"low"`, `"med"`, `"high"` |
 | `reason` | string | one-line plain-language explanation, never empty |
-| `status` | string | `"pending"`, `"resolved"`, `"dismissed"` |
+| `status` | string | `"pending"`, `"resolved"` |
 | `detected_at` | string | ISO 8601 UTC, e.g. `"2026-10-28T10:30:00Z"` |
 
 ### Timeline event object
@@ -76,7 +76,7 @@ Response (200):
   {
     "id": "p-101",
     "name": "Eleanor Vance",
-    "risk_score": 0.85,
+    "risk_score": 0.4,
     "active_alerts_count": 2,
     "last_updated": "2026-10-28T10:00:00Z"
   },
@@ -126,6 +126,28 @@ Events for one patient, sorted by `start_time`. Example for `p-101` after both i
     "test_type": null,
     "start_time": "2026-10-28T10:00:00Z",
     "end_time": "2026-10-28T10:45:00Z",
+    "status": "scheduled",
+    "has_result": false
+  },
+  {
+    "event_id": "ev-503",
+    "patient_id": "p-101",
+    "type": "lab_order",
+    "title": "HbA1c Blood Test",
+    "test_type": "HbA1c",
+    "start_time": "2026-10-29T09:00:00Z",
+    "end_time": "2026-10-29T09:30:00Z",
+    "status": "scheduled",
+    "has_result": false
+  },
+  {
+    "event_id": "ev-992",
+    "patient_id": "p-101",
+    "type": "lab_order",
+    "title": "HbA1c Test Repeat",
+    "test_type": "HbA1c",
+    "start_time": "2026-10-29T11:00:00Z",
+    "end_time": "2026-10-29T11:30:00Z",
     "status": "scheduled",
     "has_result": false
   }
@@ -273,7 +295,7 @@ For a "Possible" duplicate, the same response shape is used with `"confidence": 
 
 ### POST /alerts/{id}/accept
 
-Accepts the proposed correction, updates the timeline, resolves the alert and writes an audit entry.
+Accepts the proposed correction, updates the timeline, resolves the alert and writes an audit entry. Accepting a conflict alert reschedules the injected event; accepting a duplicate alert cancels the newer event.
 
 Request:
 
@@ -297,23 +319,12 @@ Response (200):
 
 ### GET /audit
 
-Append-only log. Optional query parameter: `?patient_id=p-101`.
+Append-only log, **sorted newest first**. Optional query parameter: `?patient_id=p-101`.
 
 Response (200):
 
 ```json
 [
-  {
-    "id": "aud-1042",
-    "alert_id": "alt-881",
-    "patient_id": "p-101",
-    "action": "plan_correction_accepted",
-    "performed_by": "staff-04",
-    "timestamp": "2026-10-28T10:45:00Z",
-    "details": "Rescheduled ev-991 to 2026-10-28T09:30:00Z",
-    "prior_state": "scheduled_start: 2026-10-28T09:10:00Z, alert_status: pending",
-    "new_state": "scheduled_start: 2026-10-28T09:30:00Z, alert_status: resolved"
-  },
   {
     "id": "aud-1043",
     "alert_id": "alt-882",
@@ -324,6 +335,17 @@ Response (200):
     "details": "Cancelled redundant lab order ev-992",
     "prior_state": "event_status: scheduled, alert_status: pending",
     "new_state": "event_status: cancelled, alert_status: resolved"
+  },
+  {
+    "id": "aud-1042",
+    "alert_id": "alt-881",
+    "patient_id": "p-101",
+    "action": "plan_correction_accepted",
+    "performed_by": "staff-04",
+    "timestamp": "2026-10-28T10:45:00Z",
+    "details": "Rescheduled ev-991 to 2026-10-28T09:30:00Z",
+    "prior_state": "scheduled_start: 2026-10-28T09:10:00Z, alert_status: pending",
+    "new_state": "scheduled_start: 2026-10-28T09:30:00Z, alert_status: resolved"
   }
 ]
 ```
@@ -345,14 +367,14 @@ Response (200):
 | Rule | Definition |
 |---|---|
 | Conflict | Two non-cancelled events of the same patient overlap when `a.start_time < b.end_time` and `b.start_time < a.end_time`. Severity `high`, confidence `Definite`. |
-| Duplicate: Definite | Same patient and same `test_type`, the new order starts within **72 hours** of an existing order, and the existing order has `has_result: false`. Severity `med`. |
+| Duplicate: Definite | Same patient and same `test_type`, the new order's `start_time` is within **72 hours** of the existing order's `start_time` (compare start times, not when the order was placed), and the existing order has `has_result: false`. Severity `med`. |
 | Duplicate: Possible | Same patient and same `test_type` within **7 days**, or the earlier order already has a result. Severity `low`. |
 | Missing step | A step of the pathway (Doctor Visit, Blood Test, Lab Result, Prescription, Follow-up) is overdue past its expected interval. Severity `med`. Build only if time allows. |
 | Priority | If two alerts disagree on the same event, the higher severity wins. |
 | Reschedule | Move the injected (reschedulable) event to the next open slot of the same length, same day preferred. |
 | Cancel duplicate | The redundant (newer) order is cancelled; the earlier order stays. |
 | Reason | Every alert has a one-line, plain-language `reason`. No empty reasons. |
-| Risk score (proposed) | `min(1.0, (2 * missed_appointments + 1.5 * overdue_steps + 1 * pending_duplicates) / 10)` |
+| Risk score (proposed) | `min(1.0, (2 * missed_appointments + 1.5 * overdue_steps + 3 * pending_conflicts + 1 * pending_duplicates) / 10)` (p-101 with 1 conflict and 1 duplicate = 0.4) |
 
 Detection latency (`latency_ms` on `/inject`) is measured from receiving the request to the alert being stored, and must stay under 2000 ms.
 
