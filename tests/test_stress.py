@@ -1,7 +1,7 @@
 import time
 import requests
 
-BASE = "http://localhost:8000"
+BASE = "http://127.0.0.1:8000"
 TARGET = "p-101"
 CLEAN = "p-102"
 
