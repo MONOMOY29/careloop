@@ -10,20 +10,46 @@ def _event_to_dict(row):
     return d
 
 
+def risk_score(conflicts, duplicates, overdue_steps=0, missed_appointments=0):
+    """Contract section 3. No data source for missed appointments yet, so it stays 0."""
+    raw = (2 * missed_appointments + 1.5 * overdue_steps
+           + 3 * conflicts + 1 * duplicates)
+    return round(min(1.0, raw / 10), 2)
+
+
 def get_patients():
-    """Contract GET /patients: sorted by risk_score descending."""
+    """Contract GET /patients: risk_score is computed from pending alerts,
+    list sorted by risk_score descending."""
     conn = get_connection()
     try:
-        rows = conn.execute("""
-            SELECT p.id, p.name, p.risk_score,
-                   (SELECT COUNT(*) FROM alerts a
-                    WHERE a.patient_id = p.id AND a.status = 'pending')
-                   AS active_alerts_count,
-                   p.last_updated
-            FROM patients p
-            ORDER BY p.risk_score DESC, p.id
-        """).fetchall()
-        return [dict(r) for r in rows]
+        patients = conn.execute(
+            "SELECT id, name, last_updated FROM patients"
+        ).fetchall()
+        pending = conn.execute(
+            "SELECT patient_id, type, COUNT(*) AS n FROM alerts "
+            "WHERE status = 'pending' GROUP BY patient_id, type"
+        ).fetchall()
+
+        counts = {}
+        for r in pending:
+            counts.setdefault(r["patient_id"], {})[r["type"]] = r["n"]
+
+        result = []
+        for p in patients:
+            c = counts.get(p["id"], {})
+            result.append({
+                "id": p["id"],
+                "name": p["name"],
+                "risk_score": risk_score(
+                    conflicts=c.get("conflict", 0),
+                    duplicates=c.get("duplicate", 0),
+                    overdue_steps=c.get("missing_step", 0),
+                ),
+                "active_alerts_count": sum(c.values()),
+                "last_updated": p["last_updated"],
+            })
+        result.sort(key=lambda d: (-d["risk_score"], d["id"]))
+        return result
     finally:
         conn.close()
 
