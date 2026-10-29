@@ -1,0 +1,6 @@
+{
+  "name": "CareLoop - Hospital Staff Coordination",
+  "description": "Hospital staff care coordination dashboard for schedule conflict resolution and duplicate order tracking. For coordination only, not clinical diagnosis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
