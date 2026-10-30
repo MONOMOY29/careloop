@@ -8,6 +8,7 @@ import pytest
 from engine.config import (
     DUPLICATE_DEFINITE_HOURS,
     DUPLICATE_POSSIBLE_DAYS,
+    FOLLOWUP_WINDOW_DAYS,
     RISK_DIVISOR,
     SEVERITY_RANK,
     WEIGHT_CONFLICT,
@@ -18,6 +19,7 @@ from engine.config import (
 from engine.rules import (
     classify_duplicate,
     find_conflicts,
+    find_missing_steps,
     resolve_alerts,
     risk_score,
 )
@@ -504,5 +506,206 @@ def test_risk_score_formula_and_zero():
     assert risk_score(conflicts=0, duplicates=0, overdue=1, missed=1) == 0.35
     # conflicts=1 (3), overdue=1 (1.5), missed=1 (2) -> 6.5 / 10 = 0.65
     assert risk_score(conflicts=1, duplicates=0, overdue=1, missed=1) == 0.65
-    # supports alternate keyword arguments
-    assert risk_score(conflicts=1, duplicates=1, overdue_steps=1, missed_appointments=1) == 0.75
+    # all arguments as exact parameters
+    assert risk_score(conflicts=1, duplicates=1, overdue=1, missed=1) == 0.75
+
+
+# ---------------------------------------------------------------------------
+# Tests for find_missing_steps
+# ---------------------------------------------------------------------------
+
+
+def test_find_missing_steps_followup_exists_inside_window():
+    """Follow-up exists inside the 14-day window -> no alert."""
+    events = [
+        {
+            "event_id": "ev-lab-1",
+            "patient_id": "p-101",
+            "type": "lab_order",
+            "title": "Comprehensive Metabolic Panel",
+            "test_type": "CMP",
+            "start_time": "2026-10-01T09:00:00Z",
+            "end_time": "2026-10-01T09:30:00Z",
+            "status": "completed",
+            "has_result": True,
+        },
+        {
+            "event_id": "ev-enc-1",
+            "patient_id": "p-101",
+            "type": "encounter",
+            "title": "Follow-up Consultation",
+            "start_time": "2026-10-08T10:00:00Z",  # +7 days, well within 14-day window
+            "end_time": "2026-10-08T10:30:00Z",
+            "status": "scheduled",
+            "has_result": False,
+        },
+    ]
+    as_of = "2026-10-20T00:00:00Z"
+    alerts = find_missing_steps(events, as_of)
+    assert alerts == []
+
+
+def test_find_missing_steps_followup_exists_outside_window():
+    """Follow-up exists but starts outside the 14-day window -> alert."""
+    events = [
+        {
+            "event_id": "ev-lab-1",
+            "patient_id": "p-101",
+            "type": "lab_order",
+            "title": "Comprehensive Metabolic Panel",
+            "test_type": "CMP",
+            "start_time": "2026-10-01T09:00:00Z",
+            "end_time": "2026-10-01T09:30:00Z",
+            "status": "completed",
+            "has_result": True,
+        },
+        {
+            "event_id": "ev-enc-late",
+            "patient_id": "p-101",
+            "type": "encounter",
+            "title": "Late Consultation",
+            "start_time": "2026-10-18T10:00:00Z",  # +17 days, strictly outside 14-day window
+            "end_time": "2026-10-18T10:30:00Z",
+            "status": "scheduled",
+            "has_result": False,
+        },
+    ]
+    as_of = "2026-10-20T00:00:00Z"
+    alerts = find_missing_steps(events, as_of)
+    assert len(alerts) == 1
+    assert alerts[0]["event_id"] == "ev-lab-1"
+    assert alerts[0]["type"] == "missing_step"
+    assert alerts[0]["severity"] == "med"
+    assert alerts[0]["confidence"] == "Definite"
+    assert alerts[0]["reason"] == "Lab result for CMP has no follow-up visit within 14 days."
+
+
+def test_find_missing_steps_window_not_yet_elapsed():
+    """Window not yet elapsed (as_of is too early) -> no alert."""
+    events = [
+        {
+            "event_id": "ev-lab-1",
+            "patient_id": "p-101",
+            "type": "lab_order",
+            "title": "HbA1c Blood Test",
+            "test_type": "HbA1c",
+            "start_time": "2026-10-01T09:00:00Z",
+            "end_time": "2026-10-01T09:30:00Z",
+            "status": "completed",
+            "has_result": True,
+        }
+    ]
+    # as_of is only 5 days after lab start (less than 14-day window)
+    as_of = "2026-10-06T09:00:00Z"
+    alerts = find_missing_steps(events, as_of)
+    assert alerts == []
+
+
+def test_find_missing_steps_cancelled_followup():
+    """Cancelled follow-up encounter is ignored -> alert."""
+    events = [
+        {
+            "event_id": "ev-lab-1",
+            "patient_id": "p-101",
+            "type": "lab_order",
+            "title": "HbA1c Blood Test",
+            "test_type": "HbA1c",
+            "start_time": "2026-10-01T09:00:00Z",
+            "end_time": "2026-10-01T09:30:00Z",
+            "status": "completed",
+            "has_result": True,
+        },
+        {
+            "event_id": "ev-enc-cancelled",
+            "patient_id": "p-101",
+            "type": "encounter",
+            "title": "Cancelled Follow-up",
+            "start_time": "2026-10-05T10:00:00Z",
+            "end_time": "2026-10-05T10:30:00Z",
+            "status": "cancelled",
+            "has_result": False,
+        },
+    ]
+    as_of = "2026-10-20T00:00:00Z"
+    alerts = find_missing_steps(events, as_of)
+    assert len(alerts) == 1
+    assert alerts[0]["event_id"] == "ev-lab-1"
+    assert alerts[0]["type"] == "missing_step"
+    assert alerts[0]["severity"] == "med"
+    assert alerts[0]["confidence"] == "Definite"
+    assert alerts[0]["reason"] == "Lab result for HbA1c has no follow-up visit within 14 days."
+
+
+def test_find_missing_steps_lab_without_result():
+    """Lab order without a result (has_result=False) -> no alert."""
+    events = [
+        {
+            "event_id": "ev-lab-pending",
+            "patient_id": "p-101",
+            "type": "lab_order",
+            "title": "HbA1c Blood Test",
+            "test_type": "HbA1c",
+            "start_time": "2026-10-01T09:00:00Z",
+            "end_time": "2026-10-01T09:30:00Z",
+            "status": "scheduled",
+            "has_result": False,
+        }
+    ]
+    as_of = "2026-10-20T00:00:00Z"
+    alerts = find_missing_steps(events, as_of)
+    assert alerts == []
+
+
+def test_find_missing_steps_cancelled_lab():
+    """Cancelled lab order -> no alert."""
+    events = [
+        {
+            "event_id": "ev-lab-cancelled",
+            "patient_id": "p-101",
+            "type": "lab_order",
+            "title": "HbA1c Blood Test",
+            "test_type": "HbA1c",
+            "start_time": "2026-10-01T09:00:00Z",
+            "end_time": "2026-10-01T09:30:00Z",
+            "status": "cancelled",
+            "has_result": True,
+        }
+    ]
+    as_of = "2026-10-20T00:00:00Z"
+    alerts = find_missing_steps(events, as_of)
+    assert alerts == []
+
+
+def test_find_missing_steps_two_overdue_labs():
+    """Two overdue lab orders without follow-up -> two alerts."""
+    events = [
+        {
+            "event_id": "ev-lab-1",
+            "patient_id": "p-101",
+            "type": "lab_order",
+            "title": "HbA1c Blood Test",
+            "test_type": "HbA1c",
+            "start_time": "2026-10-01T09:00:00Z",
+            "end_time": "2026-10-01T09:30:00Z",
+            "status": "completed",
+            "has_result": True,
+        },
+        {
+            "event_id": "ev-lab-2",
+            "patient_id": "p-101",
+            "type": "lab_order",
+            "title": "Comprehensive Metabolic Panel",
+            "test_type": "CMP",
+            "start_time": "2026-10-02T09:00:00Z",
+            "end_time": "2026-10-02T09:30:00Z",
+            "status": "completed",
+            "has_result": True,
+        },
+    ]
+    as_of = "2026-10-20T00:00:00Z"
+    alerts = find_missing_steps(events, as_of)
+    assert len(alerts) == 2
+    assert alerts[0]["event_id"] == "ev-lab-1"
+    assert alerts[0]["reason"] == "Lab result for HbA1c has no follow-up visit within 14 days."
+    assert alerts[1]["event_id"] == "ev-lab-2"
+    assert alerts[1]["reason"] == "Lab result for CMP has no follow-up visit within 14 days."

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from engine.config import (
     DUPLICATE_DEFINITE_HOURS,
     DUPLICATE_POSSIBLE_DAYS,
+    FOLLOWUP_WINDOW_DAYS,
     RISK_DIVISOR,
     SEVERITY_RANK,
     WEIGHT_CONFLICT,
@@ -192,17 +193,12 @@ def resolve_alerts(alerts):
     return [best_per_event[k][1] for k in event_order]
 
 
-def risk_score(conflicts, duplicates, overdue=0, missed=0, **kwargs):
+def risk_score(conflicts, duplicates, overdue=0, missed=0):
     """Calculate patient risk score according to the contract formula.
 
     min(1.0, (2 * missed + 1.5 * overdue + 3 * conflicts + 1 * duplicates) / 10)
     Rounded to 2 decimals, capped at 1.0.
     """
-    if "overdue_steps" in kwargs:
-        overdue = kwargs["overdue_steps"]
-    if "missed_appointments" in kwargs:
-        missed = kwargs["missed_appointments"]
-
     raw = (
         WEIGHT_MISSED * missed
         + WEIGHT_OVERDUE * overdue
@@ -211,3 +207,52 @@ def risk_score(conflicts, duplicates, overdue=0, missed=0, **kwargs):
     )
     score = min(1.0, raw / RISK_DIVISOR)
     return round(score, 2)
+
+
+def find_missing_steps(patient_events, as_of):
+    """Find completed lab orders missing a follow-up encounter within FOLLOWUP_WINDOW_DAYS.
+
+    A lab-order event with has_result == true and status not cancelled is missing its follow-up
+    if there is NO later non-cancelled event of the follow-up type ('encounter') that starts
+    after the lab's start_time and within FOLLOWUP_WINDOW_DAYS = 14, AND as_of is at least
+    FOLLOWUP_WINDOW_DAYS after the lab's start_time.
+    Returns list of {"event_id", "type": "missing_step", "severity", "confidence", "reason"}.
+    """
+    as_of_dt = _parse_time(as_of)
+    window = timedelta(days=FOLLOWUP_WINDOW_DAYS)
+    missing = []
+
+    for ev in patient_events:
+        if (ev.get("type") or "").strip().lower() != "lab_order":
+            continue
+        if (ev.get("status") or "").strip().lower() == "cancelled":
+            continue
+        if not bool(ev.get("has_result", False)):
+            continue
+
+        lab_start = _parse_time(ev["start_time"])
+        if as_of_dt < lab_start + window:
+            continue
+
+        has_followup = False
+        for other in patient_events:
+            if (other.get("status") or "").strip().lower() == "cancelled":
+                continue
+            if (other.get("type") or "").strip().lower() != "encounter":
+                continue
+            other_start = _parse_time(other["start_time"])
+            if lab_start < other_start <= lab_start + window:
+                has_followup = True
+                break
+
+        if not has_followup:
+            test_label = ev.get("test_type") or ev.get("title") or "lab test"
+            missing.append({
+                "event_id": _get_event_id(ev),
+                "type": "missing_step",
+                "severity": "med",
+                "confidence": "Definite",
+                "reason": f"Lab result for {test_label} has no follow-up visit within {FOLLOWUP_WINDOW_DAYS} days.",
+            })
+
+    return missing

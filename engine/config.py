@@ -4,6 +4,9 @@ DUPLICATE_DEFINITE_HOURS = 72
 # Threshold in days for possible duplicate lab orders
 DUPLICATE_POSSIBLE_DAYS = 7
 
+# Window in days within which a completed lab order requires a follow-up encounter
+FOLLOWUP_WINDOW_DAYS = 14
+
 # Risk score weight for missed appointments
 WEIGHT_MISSED = 2
 
@@ -21,15 +24,3 @@ RISK_DIVISOR = 10
 
 # Severity rank ordering where high > med > low
 SEVERITY_RANK = {"high": 3, "med": 2, "low": 1}
-
-# Alias for missed appointments weight
-RISK_WEIGHT_MISSED = WEIGHT_MISSED
-
-# Alias for overdue care pathway steps weight
-RISK_WEIGHT_OVERDUE = WEIGHT_OVERDUE
-
-# Alias for scheduling conflicts weight
-RISK_WEIGHT_CONFLICT = WEIGHT_CONFLICT
-
-# Alias for duplicate lab orders weight
-RISK_WEIGHT_DUPLICATE = WEIGHT_DUPLICATE
