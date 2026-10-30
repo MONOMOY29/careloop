@@ -1,7 +1,12 @@
+from datetime import datetime, timezone
 from data.db import get_connection
 
 # Contract section 5: injected events continue from ev-991, alerts from alt-881
 ID_START = {"ev": 991, "alt": 881, "aud": 1042}
+
+
+def _now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _event_to_dict(row):
@@ -15,6 +20,31 @@ def risk_score(conflicts, duplicates, overdue_steps=0, missed_appointments=0):
     raw = (2 * missed_appointments + 1.5 * overdue_steps
            + 3 * conflicts + 1 * duplicates)
     return round(min(1.0, raw / 10), 2)
+
+
+def get_patient(patient_id):
+    """Get single patient by id. Returns dict or None."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM patients WHERE id = ?", (patient_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def touch_patient(patient_id):
+    """Update patient's last_updated timestamp to now (UTC Z)."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE patients SET last_updated = ? WHERE id = ?",
+            (_now(), patient_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_patients():
@@ -73,13 +103,20 @@ def get_timeline(patient_id):
 
 
 def next_id(conn, table, column, prefix):
-    """ev-991, ev-992... (alt-881..., aud-1042...). Restarts after a reset."""
+    """ev-991, ev-992... (alt-881..., aud-1042...). Restarts after a reset.
+    Considers only purely numeric suffixes so that Synthea ids like ev-s0001
+    are ignored when computing the next injected id."""
     start = ID_START[prefix]
     rows = conn.execute(
         f"SELECT {column} FROM {table} WHERE {column} LIKE ?", (prefix + "-%",)
     ).fetchall()
-    nums = [int(r[0].split("-")[1]) for r in rows]
-    nums = [n for n in nums if n >= start]
+    nums = []
+    for r in rows:
+        suffix = r[0].split("-", 1)[1]
+        if suffix.isdigit():
+            n = int(suffix)
+            if n >= start:
+                nums.append(n)
     return f"{prefix}-{max(nums) + 1 if nums else start}"
 
 
@@ -102,12 +139,6 @@ def add_event(patient_id, type, title, start_time, end_time,
     finally:
         conn.close()
 
-from datetime import datetime, timezone
-
-
-def _now():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
 
 def get_event(event_id):
     conn = get_connection()
@@ -120,13 +151,20 @@ def get_event(event_id):
         conn.close()
 
 
-def reschedule_event(event_id, new_start, new_end):
-    """Used by POST /alerts/{id}/accept for conflicts. Returns updated event or None."""
+def update_event(event_id, **fields):
+    """Update event fields (start_time, end_time, status, has_result). Returns updated event or None."""
+    allowed = {"start_time", "end_time", "status", "has_result"}
+    fields = {k: v for k, v in fields.items() if k in allowed}
+    if not fields:
+        return get_event(event_id)
+    if "has_result" in fields:
+        fields["has_result"] = int(fields["has_result"])
+    sets = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
     try:
         cur = conn.execute(
-            "UPDATE events SET start_time = ?, end_time = ? WHERE event_id = ?",
-            (new_start, new_end, event_id),
+            f"UPDATE events SET {sets} WHERE event_id = ?",
+            (*fields.values(), event_id),
         )
         conn.commit()
         if cur.rowcount == 0:
@@ -134,39 +172,46 @@ def reschedule_event(event_id, new_start, new_end):
     finally:
         conn.close()
     return get_event(event_id)
+
+
+def reschedule_event(event_id, new_start, new_end):
+    """Used by POST /alerts/{id}/accept for conflicts. Returns updated event or None."""
+    return update_event(event_id, start_time=new_start, end_time=new_end)
 
 
 def cancel_event(event_id):
     """Used by POST /alerts/{id}/accept for duplicates. Returns updated event or None."""
-    conn = get_connection()
-    try:
-        cur = conn.execute(
-            "UPDATE events SET status = 'cancelled' WHERE event_id = ?",
-            (event_id,),
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            return None
-    finally:
-        conn.close()
-    return get_event(event_id)
+    return update_event(event_id, status="cancelled")
+
 
 def add_alert(patient_id, type, confidence, severity, reason,
-              detected_at=None, status="pending"):
+              detected_at=None, status="pending", event_id=None, related_event_id=None):
     """Insert one alert (ids from alt-881) and return it in contract format."""
     conn = get_connection()
     try:
         alert_id = next_id(conn, "alerts", "id", "alt")
         conn.execute(
-            "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (alert_id, patient_id, type, confidence, severity, reason,
-             status, detected_at or _now()),
+             status, detected_at or _now(), event_id, related_event_id),
         )
         conn.commit()
         row = conn.execute(
             "SELECT * FROM alerts WHERE id = ?", (alert_id,)
         ).fetchone()
         return dict(row)
+    finally:
+        conn.close()
+
+
+def get_alert(alert_id):
+    """Get single alert by id. Returns dict or None."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM alerts WHERE id = ?", (alert_id,)
+        ).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
@@ -206,15 +251,15 @@ def set_alert_status(alert_id, status):
 
 
 def add_audit(alert_id, patient_id, action, performed_by, details,
-              prior_state, new_state, timestamp=None):
+              prior_state, new_state, notes="", timestamp=None):
     """Append one audit entry (ids from aud-1042) and return it."""
     conn = get_connection()
     try:
         audit_id = next_id(conn, "audit", "id", "aud")
         conn.execute(
-            "INSERT INTO audit VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO audit VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (audit_id, alert_id, patient_id, action, performed_by,
-             timestamp or _now(), details, prior_state, new_state),
+             timestamp or _now(), details, prior_state, new_state, notes),
         )
         conn.commit()
         return dict(conn.execute(

@@ -1,3 +1,4 @@
+import os
 from data.db import get_connection, create_tables
 
 # Contract section 5: p-101 is the injection target
@@ -37,6 +38,12 @@ def reset_demo_data():
     conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", EVENTS)
     conn.commit()
     conn.close()
+
+    if os.getenv("CARELOOP_SYNTHEA") == "1":
+        from data.synthea_subset import load_synthea_demo
+        loaded = load_synthea_demo()
+        return len(PATIENTS) + loaded
+
     return len(PATIENTS)
 
 
