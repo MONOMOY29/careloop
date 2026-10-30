@@ -31,9 +31,9 @@ EVENTS = [
 def reset_demo_data():
     """Wipe everything and restore the clean demo seed. Returns number of patients."""
     conn = get_connection()
-    create_tables(conn)
     for table in ("audit", "alerts", "events", "patients"):
-        conn.execute(f"DELETE FROM {table}")
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+    create_tables(conn)
     conn.executemany("INSERT INTO patients VALUES (?, ?, ?, ?)", PATIENTS)
     conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", EVENTS)
     conn.commit()

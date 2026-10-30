@@ -1,29 +1,38 @@
+
 import sqlite3
 from pathlib import Path
 
-# careloop.db repo ke root folder mein banegi, chahe code kahin se chale
+# careloop.db will be created in the repository root
 DB_PATH = Path(__file__).resolve().parent.parent / "careloop.db"
 
 
 class CareloopConnection(sqlite3.Connection):
-    """Custom SQLite connection handling legacy 8-column alerts and 9-column audit INSERTs."""
+    """Custom SQLite connection handling legacy 8-column alerts
+    and 9-column audit INSERTs."""
+
     def execute(self, sql, parameters=()):
         if isinstance(sql, str):
             if "INSERT INTO alerts VALUES" in sql and len(parameters) == 8:
                 sql = sql.replace(
                     "INSERT INTO alerts VALUES",
-                    "INSERT INTO alerts (id, patient_id, type, confidence, severity, reason, status, detected_at) VALUES"
+                    "INSERT INTO alerts "
+                    "(id, patient_id, type, confidence, severity, reason, "
+                    "status, detected_at) VALUES"
                 )
+
             elif "INSERT INTO audit VALUES" in sql and len(parameters) == 9:
                 sql = sql.replace(
                     "INSERT INTO audit VALUES",
-                    "INSERT INTO audit (id, alert_id, patient_id, action, performed_by, timestamp, details, prior_state, new_state) VALUES"
+                    "INSERT INTO audit "
+                    "(id, alert_id, patient_id, action, performed_by, "
+                    "timestamp, details, prior_state, new_state) VALUES"
                 )
+
         return super().execute(sql, parameters)
 
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH, factory=CareloopConnection)
+    conn = sqlite3.connect(str(DB_PATH), factory=CareloopConnection)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -72,25 +81,35 @@ def create_tables(conn):
         details       TEXT NOT NULL,
         prior_state   TEXT NOT NULL,
         new_state     TEXT NOT NULL,
-        notes         TEXT
+        notes         TEXT NOT NULL DEFAULT ''
     );
 
     CREATE INDEX IF NOT EXISTS idx_events_patient_time
         ON events (patient_id, start_time);
+
     CREATE INDEX IF NOT EXISTS idx_events_patient_test
         ON events (patient_id, test_type);
     """)
 
-    # Safe upgrade for existing databases (PRAGMA table_info returns (cid, name, type, notnull, dflt_value, pk))
-    alert_cols = {r[1] for r in conn.execute("PRAGMA table_info(alerts)").fetchall()}
+    # Safe upgrade for existing databases
+    alert_cols = {
+        r[1] for r in conn.execute("PRAGMA table_info(alerts)").fetchall()
+    }
+
     if "event_id" not in alert_cols:
         conn.execute("ALTER TABLE alerts ADD COLUMN event_id TEXT")
+
     if "related_event_id" not in alert_cols:
         conn.execute("ALTER TABLE alerts ADD COLUMN related_event_id TEXT")
 
-    audit_cols = {r[1] for r in conn.execute("PRAGMA table_info(audit)").fetchall()}
+    audit_cols = {
+        r[1] for r in conn.execute("PRAGMA table_info(audit)").fetchall()
+    }
+
     if "notes" not in audit_cols:
-        conn.execute("ALTER TABLE audit ADD COLUMN notes TEXT")
+        conn.execute(
+            "ALTER TABLE audit ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
+        )
 
     conn.commit()
 
@@ -98,8 +117,12 @@ def create_tables(conn):
 if __name__ == "__main__":
     conn = get_connection()
     create_tables(conn)
+
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
     ).fetchall()
+
     print("Tables created:", [r["name"] for r in rows])
+
     conn.close()
+
