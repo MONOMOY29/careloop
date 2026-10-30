@@ -108,4 +108,7 @@ def audit(patient_id: Optional[str] = None):
 @app.post("/reset", response_model=ResetResponse)
 def reset():
     A.reset_db()
-    return {"status": "reset", "patients": len(A.list_patients())}
+    return {
+        "status": "reset",
+        "patients": len(A.list_patients())
+    }
