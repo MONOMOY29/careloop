@@ -14,7 +14,7 @@ def teardown_function():
 def _add_alert(alert_id, patient_id, type_, severity, status="pending"):
     conn = get_connection()
     conn.execute(
-        "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO alerts (id, patient_id, type, confidence, severity, reason, status, detected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (alert_id, patient_id, type_, "Definite", severity,
          "test reason", status, "2026-10-28T10:30:00Z"),
     )

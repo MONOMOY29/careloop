@@ -152,15 +152,18 @@ def cancel_event(event_id):
     return get_event(event_id)
 
 def add_alert(patient_id, type, confidence, severity, reason,
-              detected_at=None, status="pending"):
+              detected_at=None, status="pending",
+              event_id=None, related_event_id=None):
     """Insert one alert (ids from alt-881) and return it in contract format."""
     conn = get_connection()
     try:
         alert_id = next_id(conn, "alerts", "id", "alt")
         conn.execute(
-            "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO alerts (id, patient_id, type, confidence, severity, "
+            "reason, status, detected_at, event_id, related_event_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (alert_id, patient_id, type, confidence, severity, reason,
-             status, detected_at or _now()),
+             status, detected_at or _now(), event_id, related_event_id),
         )
         conn.commit()
         row = conn.execute(
@@ -206,15 +209,17 @@ def set_alert_status(alert_id, status):
 
 
 def add_audit(alert_id, patient_id, action, performed_by, details,
-              prior_state, new_state, timestamp=None):
+              prior_state, new_state, notes="", timestamp=None):
     """Append one audit entry (ids from aud-1042) and return it."""
     conn = get_connection()
     try:
         audit_id = next_id(conn, "audit", "id", "aud")
         conn.execute(
-            "INSERT INTO audit VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO audit (id, alert_id, patient_id, action, performed_by, "
+            "timestamp, details, prior_state, new_state, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (audit_id, alert_id, patient_id, action, performed_by,
-             timestamp or _now(), details, prior_state, new_state),
+            timestamp or _now(), details, prior_state, new_state, notes),
         )
         conn.commit()
         return dict(conn.execute(

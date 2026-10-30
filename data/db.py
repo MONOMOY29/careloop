@@ -40,7 +40,9 @@ def create_tables(conn):
         severity     TEXT NOT NULL,
         reason       TEXT NOT NULL,
         status       TEXT NOT NULL,
-        detected_at  TEXT NOT NULL
+        detected_at  TEXT NOT NULL,
+        event_id     TEXT,
+        related_event_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS audit (
@@ -52,7 +54,8 @@ def create_tables(conn):
         timestamp     TEXT NOT NULL,
         details       TEXT NOT NULL,
         prior_state   TEXT NOT NULL,
-        new_state     TEXT NOT NULL
+        new_state     TEXT NOT NULL,
+        notes         TEXT NOT NULL DEFAULT ''
     );
 
     CREATE INDEX IF NOT EXISTS idx_events_patient_time
