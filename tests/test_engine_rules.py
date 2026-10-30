@@ -20,6 +20,7 @@ from engine.rules import (
     classify_duplicate,
     find_conflicts,
     find_missing_steps,
+    find_next_slot,
     resolve_alerts,
     risk_score,
 )
@@ -709,3 +710,72 @@ def test_find_missing_steps_two_overdue_labs():
     assert alerts[0]["reason"] == "Lab result for HbA1c has no follow-up visit within 14 days."
     assert alerts[1]["event_id"] == "ev-lab-2"
     assert alerts[1]["reason"] == "Lab result for CMP has no follow-up visit within 14 days."
+
+
+# ---------------------------------------------------------------------------
+# Tests for find_next_slot
+# ---------------------------------------------------------------------------
+
+def test_find_next_slot_no_overlap():
+    event = {'event_id': 'ev-new', 'start_time': '2026-10-28T09:10:00Z', 'end_time': '2026-10-28T09:40:00Z'}
+    others = [{'event_id': 'ev-501', 'start_time': '2026-10-28T10:00:00Z', 'end_time': '2026-10-28T10:30:00Z', 'status': 'scheduled'}]
+    start, end = find_next_slot(event, others)
+    assert start == '2026-10-28T09:10:00Z'
+    assert end == '2026-10-28T09:40:00Z'
+
+def test_find_next_slot_single_blocker():
+    event = {'event_id': 'ev-991', 'start_time': '2026-10-28T09:10:00Z', 'end_time': '2026-10-28T09:40:00Z'}
+    others = [{'event_id': 'ev-501', 'start_time': '2026-10-28T09:00:00Z', 'end_time': '2026-10-28T09:30:00Z', 'status': 'scheduled'}]
+    start, end = find_next_slot(event, others)
+    assert start == '2026-10-28T09:30:00Z'
+    assert end == '2026-10-28T10:00:00Z'
+
+def test_find_next_slot_chained_blockers():
+    event = {'event_id': 'ev-new', 'start_time': '2026-10-28T09:00:00Z', 'end_time': '2026-10-28T09:30:00Z'}
+    others = [
+        {'event_id': 'ev-b1', 'start_time': '2026-10-28T09:00:00Z', 'end_time': '2026-10-28T09:30:00Z', 'status': 'scheduled'},
+        {'event_id': 'ev-b2', 'start_time': '2026-10-28T09:30:00Z', 'end_time': '2026-10-28T10:00:00Z', 'status': 'scheduled'},
+        {'event_id': 'ev-b3', 'start_time': '2026-10-28T10:00:00Z', 'end_time': '2026-10-28T10:30:00Z', 'status': 'scheduled'},
+    ]
+    start, end = find_next_slot(event, others)
+    assert start == '2026-10-28T10:30:00Z'
+    assert end == '2026-10-28T11:00:00Z'
+
+def test_find_next_slot_touching_boundary_is_open():
+    event = {'event_id': 'ev-new', 'start_time': '2026-10-28T09:10:00Z', 'end_time': '2026-10-28T09:40:00Z'}
+    others = [
+        {'event_id': 'ev-501', 'start_time': '2026-10-28T09:00:00Z', 'end_time': '2026-10-28T09:30:00Z', 'status': 'scheduled'},
+        {'event_id': 'ev-502', 'start_time': '2026-10-28T10:00:00Z', 'end_time': '2026-10-28T10:45:00Z', 'status': 'scheduled'},
+    ]
+    start, end = find_next_slot(event, others)
+    assert start == '2026-10-28T09:30:00Z'
+    assert end == '2026-10-28T10:00:00Z'
+
+def test_find_next_slot_cancelled_and_self_ignored():
+    event = {'event_id': 'ev-new', 'start_time': '2026-10-28T09:10:00Z', 'end_time': '2026-10-28T09:40:00Z'}
+    others = [
+        {'event_id': 'ev-c', 'start_time': '2026-10-28T09:00:00Z', 'end_time': '2026-10-28T10:00:00Z', 'status': 'cancelled'},
+        {'event_id': 'ev-new', 'start_time': '2026-10-28T09:10:00Z', 'end_time': '2026-10-28T09:40:00Z', 'status': 'scheduled'},
+    ]
+    start, end = find_next_slot(event, others)
+    assert start == '2026-10-28T09:10:00Z'
+    assert end == '2026-10-28T09:40:00Z'
+
+def test_find_next_slot_iteration_limit():
+    from datetime import datetime, timedelta, timezone
+    base = datetime(2026, 10, 28, 9, 0, tzinfo=timezone.utc)
+    others = [
+        {
+            'event_id': f'ev-block-{i}',
+            'start_time': (base + timedelta(minutes=30*i)).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'end_time': (base + timedelta(minutes=30*(i+1))).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'status': 'scheduled',
+        }
+        for i in range(60)
+    ]
+    event = {'event_id': 'ev-new', 'start_time': '2026-10-28T09:00:00Z', 'end_time': '2026-10-28T09:30:00Z'}
+    start, end = find_next_slot(event, others)
+    expected_start = (base + timedelta(minutes=30*50)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    expected_end = (base + timedelta(minutes=30*51)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    assert start == expected_start
+    assert end == expected_end

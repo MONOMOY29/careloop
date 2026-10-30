@@ -4,7 +4,7 @@ Pure functions over plain dicts and lists, standard library only.
 No database, no file I/O, no imports from api/ or data/.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from engine.config import (
     DUPLICATE_DEFINITE_HOURS,
@@ -28,6 +28,13 @@ def _parse_time(t):
             return datetime.fromisoformat(t[:-1] + "+00:00")
         return datetime.fromisoformat(t)
     raise TypeError(f"Expected datetime or ISO-8601 string, got {type(t)}")
+
+
+def _format_time(t):
+    """Format datetime as UTC ISO-8601 string with trailing Z."""
+    if t.tzinfo is not None:
+        t = t.astimezone(timezone.utc)
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _get_event_id(event):
@@ -256,3 +263,35 @@ def find_missing_steps(patient_events, as_of):
             })
 
     return missing
+
+
+def find_next_slot(event, other_events):
+    """Find the earliest open slot of the same length as event.
+
+    Reproduces fallback's slot search:
+    - Same earliest-open-slot logic (moves start to min(blockers.end_time))
+    - Ignores cancelled events and the event itself
+    - Iteration limit: 50
+    - If no open slot is found within 50 iterations, returns the resulting slot
+    Returns (proposed_start, proposed_end) as ISO-8601 UTC strings.
+    """
+    start = _parse_time(event["start_time"])
+    dur = _parse_time(event["end_time"]) - start
+
+    active_others = [
+        o for o in other_events
+        if (o.get("status") or "").lower() != "cancelled"
+        and not _is_same_event(event, o)
+    ]
+
+    for _ in range(50):
+        end = start + dur
+        blockers = [
+            _parse_time(o["end_time"]) for o in active_others
+            if start < _parse_time(o["end_time"]) and _parse_time(o["start_time"]) < end
+        ]
+        if not blockers:
+            break
+        start = min(blockers)
+
+    return _format_time(start), _format_time(start + dur)
