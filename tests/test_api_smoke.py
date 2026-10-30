@@ -17,7 +17,9 @@ DUP = {"patient_id": "p-101", "anomaly_type": "duplicate",
 
 def test_full_flow():
     assert c.post("/reset").json() == {"status": "reset", "patients": 2}
-    assert [p["risk_score"] for p in c.get("/patients").json()] == [0.0, 0.0]
+    patients = c.get("/patients").json()
+    demo_patients = [p for p in patients if p["id"] in ("p-101", "p-102")]
+    assert [p["risk_score"] for p in demo_patients] == [0.0, 0.0]
 
     r = c.post("/inject", json=CONFLICT)
     assert r.status_code == 201

@@ -60,6 +60,8 @@ def corrected_plan(pid: str):
 def inject(req: InjectRequest):
     t0 = time.perf_counter()
     _need_patient(req.patient_id)
+    if A.is_synthea_patient(req.patient_id):
+        raise HTTPException(409, "Synthea patients are read-only")
     p, kind = req.payload, req.anomaly_type
     ev = A.add_event(req.patient_id, "procedure" if kind == "conflict" else "lab_order", p.title,
                      p.test_type.strip() if kind == "duplicate" else None, p.start_time, p.end_time)
@@ -108,4 +110,4 @@ def audit(patient_id: Optional[str] = None):
 @app.post("/reset", response_model=ResetResponse)
 def reset():
     A.reset_db()
-    return {"status": "reset", "patients": len(A.list_patients())}
+    return {"status": "reset", "patients": len(A.list_demo_patients())}
