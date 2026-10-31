@@ -16,8 +16,9 @@ DUP = {"patient_id": "p-101", "anomaly_type": "duplicate",
 
 
 def test_full_flow():
-    assert c.post("/reset").json() == {"status": "reset", "patients": 2}
+    assert c.post("/reset").json() == {"status": "reset", "patients": 14}
     patients = c.get("/patients").json()
+    assert len(patients) == 14
     demo_patients = [p for p in patients if p["id"] in ("p-101", "p-102")]
     assert [p["risk_score"] for p in demo_patients] == [0.0, 0.0]
 
@@ -75,7 +76,7 @@ def test_errors_and_reset():
 
 def test_possible_duplicate_when_result_exists():
     c.post("/reset")
-    from api import fallback as F
-    F.update_event("ev-503", has_result=True)
+    from api import adapters as A
+    A.update_event("ev-503", has_result=True)
     j = c.post("/inject", json=DUP).json()
     assert j["alert"]["confidence"] == "Possible" and j["alert"]["severity"] == "low"

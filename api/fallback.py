@@ -46,6 +46,36 @@ def reset_db():
         _db.executemany("INSERT INTO api_patients VALUES (?,?,?)", SEED_PATIENTS)
         _db.executemany("INSERT INTO api_events VALUES (?,?,?,?,?,?,?,'scheduled',0)", SEED_EVENTS)
         _db.executemany("INSERT INTO api_meta VALUES (?,?)", [("ev", 991), ("alt", 881), ("aud", 1042)])
+        if os.getenv("CARELOOP_SYNTHEA", "1") == "1":
+            try:
+                import json
+                from pathlib import Path
+                jpath = Path(__file__).resolve().parent.parent / "data" / "synthea_demo.json"
+                if jpath.is_file():
+                    with open(jpath, encoding="utf-8") as f:
+                        sdata = json.load(f)
+                    _db.executemany(
+                        "INSERT INTO api_patients VALUES (?,?,?)",
+                        [(p["id"], p["name"], p["last_updated"]) for p in sdata.get("patients", [])]
+                    )
+                    _db.executemany(
+                        "INSERT INTO api_events VALUES (?,?,?,?,?,?,?,'scheduled',?)",
+                        [
+                            (
+                                e["event_id"],
+                                e["patient_id"],
+                                e["type"],
+                                e["title"],
+                                e.get("test_type"),
+                                e["start_time"],
+                                e["end_time"],
+                                int(e.get("has_result", 0)),
+                            )
+                            for e in sdata.get("events", [])
+                        ]
+                    )
+            except Exception:
+                pass
 
 
 if not _db.execute("SELECT name FROM sqlite_master WHERE name='api_patients'").fetchone():

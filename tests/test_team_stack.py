@@ -60,8 +60,8 @@ DUP = {
 }
 
 # 2. Reset
-assert client.post("/reset").json() == {"status": "reset", "patients": 2}
-assert [p["risk_score"] for p in client.get("/patients").json()] == [0.0, 0.0]
+assert client.post("/reset").json() == {"status": "reset", "patients": 14}
+assert all(p["risk_score"] == 0.0 for p in client.get("/patients").json())
 
 # 3. Inject conflict
 r = client.post("/inject", json=CONFLICT)

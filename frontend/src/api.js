@@ -5,7 +5,7 @@
 
 export const BASE_URL = 'http://localhost:8000';
 
-let USE_MOCK = true;
+let USE_MOCK = false;
 let backendOffline = false;
 const listeners = new Set();
 

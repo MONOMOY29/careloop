@@ -1,14 +1,10 @@
-
 """
 The ONLY place that touches teammates' code.
 
-By default everything comes from api/fallback.py (works standalone).
-To use Member 1 (/data) and Member 2 (/engine) functions instead, set
-USE_TEAM_CODE=1 and make sure their functions use the same names and
-signatures as in fallback.py. Missing ones fall back.
-
-Set CARELOOP_ENGINE=fallback to force the old stand-in when
-USE_TEAM_CODE is unset.
+By default everything comes from data and engine (active team code).
+Missing ones fall back to api/fallback.py (works standalone).
+Set USE_TEAM_CODE=0 to force fallback data/engine.
+Set CARELOOP_ENGINE=fallback to force the fallback engine.
 """
 import sqlite3
 import importlib
@@ -44,7 +40,7 @@ _ENGINE = [
 
 
 def _pick(name, module):
-    if os.getenv("USE_TEAM_CODE") == "1":
+    if os.getenv("USE_TEAM_CODE", "1") == "1":
         try:
             return getattr(importlib.import_module(module), name)
         except Exception:
@@ -64,7 +60,7 @@ for _n in _ENGINE:
 # Use engine rules directly when team code is not enabled,
 # unless the fallback engine has explicitly been requested.
 if (
-    os.getenv("USE_TEAM_CODE") != "1"
+    os.getenv("USE_TEAM_CODE", "1") != "1"
     and os.getenv("CARELOOP_ENGINE") != "fallback"
 ):
     try:
@@ -134,54 +130,32 @@ if (
 # Synthea integration
 # ---------------------------------------------------------
 
-# Preserve the original selected data functions.
-_demo_get_patient = get_patient
-_demo_list_patients = list_patients
-_demo_get_timeline = get_timeline
-
-# Keep the original demo patient listing available.
-list_demo_patients = _demo_list_patients
+_SYNTHEA_IDS = None
 
 
-# When Synthea mode is enabled, use the active data layer.
-# data.seed.reset_demo_data() loads:
-#   2 original demo patients
-#   12 selected Synthea patients
-# Total: 14 patients.
-
-if os.getenv("CARELOOP_SYNTHEA") == "1":
-
-    def get_patient(pid):
-        """Get a patient from the active database."""
-        return _demo_get_patient(pid)
-
-    def list_patients():
-        """List all patients from the active database."""
-        return _demo_list_patients()
-
-    def get_timeline(pid):
-        """Get a patient's timeline from the active database."""
-        return _demo_get_timeline(pid)
+def _get_synthea_ids():
+    global _SYNTHEA_IDS
+    if _SYNTHEA_IDS is None:
+        try:
+            json_path = (
+                Path(__file__).resolve().parent.parent
+                / "data"
+                / "synthea_demo.json"
+            )
+            with open(json_path, encoding="utf-8") as f:
+                data = json.load(f)
+            _SYNTHEA_IDS = {patient["id"] for patient in data.get("patients", [])}
+        except Exception:
+            _SYNTHEA_IDS = set()
+    return _SYNTHEA_IDS
 
 
 def is_synthea_patient(patient_id: str) -> bool:
-    if os.getenv("CARELOOP_SYNTHEA") != "1":
+    if os.getenv("CARELOOP_SYNTHEA", "1") != "1":
         return False
+    return patient_id in _get_synthea_ids()
 
-    try:
-        json_path = (
-            Path(__file__).resolve().parent.parent
-            / "data"
-            / "synthea_demo.json"
-        )
 
-        with open(json_path, encoding="utf-8") as f:
-            data = json.load(f)
-
-        return any(
-            patient["id"] == patient_id
-            for patient in data["patients"]
-        )
-
-    except (OSError, json.JSONDecodeError, KeyError, TypeError):
-        return False
+def list_demo_patients():
+    """List original demo patients (p-101, p-102)."""
+    return [p for p in list_patients() if not is_synthea_patient(p["id"])]

@@ -39,7 +39,7 @@ def reset_demo_data():
     conn.commit()
     conn.close()
 
-    if os.getenv("CARELOOP_SYNTHEA") == "1":
+    if os.getenv("CARELOOP_SYNTHEA", "1") == "1":
         from data.synthea_subset import load_synthea_demo
         loaded = load_synthea_demo()
         return len(PATIENTS) + loaded

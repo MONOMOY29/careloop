@@ -13,8 +13,8 @@ def teardown_function():
     reset_demo_data()  # leave the db clean after every test
 
 
-def test_reset_returns_two_patients():
-    assert reset_demo_data() == 2
+def test_reset_returns_fourteen_patients():
+    assert reset_demo_data() == 14
 
 
 def test_p101_timeline_matches_contract_seed():
@@ -39,7 +39,7 @@ def test_unknown_patient_returns_none():
 
 def test_patients_list_has_zero_alerts():
     ps = get_patients()
-    assert len(ps) == 2
+    assert len(ps) == 14
     assert all(p["active_alerts_count"] == 0 for p in ps)
 
 
@@ -65,3 +65,10 @@ def test_control_patient_p102_has_no_overlaps_or_repeat_tests():
                         and b["start_time"] < a["end_time"])
     tests = [e["test_type"] for e in tl if e["test_type"]]
     assert len(tests) == len(set(tests))
+
+
+def test_reset_with_synthea_disabled_returns_two_patients(monkeypatch):
+    monkeypatch.setenv("CARELOOP_SYNTHEA", "0")
+    assert reset_demo_data() == 2
+    ps = get_patients()
+    assert len(ps) == 2
